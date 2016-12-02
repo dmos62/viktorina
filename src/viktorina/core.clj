@@ -1,13 +1,14 @@
 (ns viktorina.core
   (:require
     [clojure.string]
+    [clojure.java.io :as io]
     [hiccup.core :as hic]
     [markdown.core :as md]
-            ))
+    ))
 
 (defprotocol IContent
   (render [content])
-  (save [content])
+  (save [content where])
   )
 
 (defrecord Content [about raw]
@@ -22,11 +23,14 @@
         ; https://github.com/yogthos/markdown-clj
         (md/md-to-html-string raw)
         )))
-  (save [content]
-    (let [href (-> content :about :href)]
+  (save [content where]
+    (let [uri (-> content :about :uri)
+          where (io/file where)]
+      (assert (.isDirectory where))
       (->>
         (render content)
-        (spit href) ; http://stackoverflow.com/a/7757674/1714997
+        (spit (io/file where (str uri ".html")))
+        ; http://stackoverflow.com/a/7757674/1714997
         )))
   )
 
@@ -46,6 +50,8 @@
     (clojure.string/split whole #"\n*\s*<=>\s*\n*" 2)
     ))
 
+(defn continue-when [test in] (assert (test in)) in)
+
 (extend-type java.io.File
   IExtendedFile
   (split-ext [file] 
@@ -63,18 +69,25 @@
       (.isFile file)
       (-> (extension file) (= "content"))
       ))
-  (extract-about [file] (first (split-sections file)))
-  (extract-raw [file] (second (split-sections file)))
+  (extract-about ^IPersistentMap [file] 
+    (->>
+      (first (split-sections file))
+      clojure.edn/read-string
+      (continue-when map?)
+      ))
+  (extract-raw ^String [file]
+    (->>
+      (second (split-sections file))
+      (continue-when string?)
+      ))
   (to-content [file]
     (map->Content
-      {:about (merge 
-                (extract-about file)
-                {:href file}) ; TODO
+      {:about (merge {:uri (neim file)} (extract-about file))
        :raw (extract-raw file)
        }))
   )
 
-(defn files-in [path] (-> (clojure.java.io/file path) file-seq))
+(defn files-in [path] (-> (io/file path) file-seq))
 
 (defn content-in [path-to-dir]
   (->>
@@ -83,11 +96,11 @@
     (map to-content)
     ))
 
-(def projects (content-in "projects"))
+(def projects (content-in "content"))
 
 (defn render-project-summary [project-content]
-  (let [{:keys [main-image summary href]} (project-content :about)]
-    [:a {:href href}
+  (let [{:keys [main-image summary uri]} (:about project-content)]
+    [:a {:href uri}
      [:img {:src main-image}]
      [:p summary]
      ]))
@@ -96,7 +109,8 @@
 
 (def index
   (map->Content
-    {:about {}
+    {:about
+     {:uri "index"}
      :raw
      [:body
       [:header "Projects"]
@@ -107,12 +121,15 @@
       [:footer]
       ]}))
 
-; (save index)
-; (save contacts)
-; (->>
-;   projects
-;   (map save)
-;   doall)
+#_(letfn [(save [content] (save "gold-dir" content))]
+
+    (save index)
+    (save contacts)
+    (->>
+      projects
+      (map save)
+      doall)
+    )
 
 
 ;/* = */
